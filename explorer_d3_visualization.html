@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HyperGraph Explorer (D3.js Force Layout) - Toggle Views & Search (Fixed)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* Existing Styles */
+        .node { stroke: #fff; stroke-width: 1.5px; transition: r 0.1s, opacity 0.3s; }
+        .hyperedge-proxy { fill: #FF69B4; stroke: #fff; stroke-width: 1.5px; cursor: pointer; } 
+        .entity-node { fill: #4682B4; }
+        .link { stroke: #999; stroke-opacity: 0.6; transition: stroke-width 0.1s, stroke-opacity 0.3s; }
+
+        /* New Styles for Highlighting */
+        .faded { opacity: 0.15; }
+        .highlighted-link { stroke: #FF4500; stroke-width: 3px; stroke-opacity: 1.0; }
+        .highlighted-node { fill: #FF4500 !important; r: 15; opacity: 1.0; }
+        .highlighted-hyperedge-proxy { fill: #FF4500 !important; stroke: #FF4500; }
+        
+        /* Style for status message and controls */
+        #controls { margin-bottom: 10px; }
+        #status-message {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #333;
+        }
+        .two-section-link { stroke: #1E90FF; stroke-width: 2px; } /* Dodger Blue for projection links */
+    </style>
+</head>
+<body>
+
+<h3>Hypergraph Visualization (D3.js Force-Directed Layout)</h3>
+
+<div id="controls">
+    <button onclick="toggleView()">Toggle View: <span id="view-mode">Bipartite</span></button>
+    <label for="node-select" style="margin-left: 20px;">Search Node:</label>
+    <select id="node-select" onchange="handleSearchSelect(this.value)">
+        <option value="">-- Select an Entity Node --</option>
+    </select>
+</div>
+
+<svg width="800" height="600"></svg>
+<div id="view-description">
+    <p>Current View: **Bipartite Projection**. Nodes (Blue) connect to Group Proxies (Pink) they belong to. Click a **Pink Proxy** to highlight its members.</p>
+</div> 
+<div id="status-message">Current Selection: None</div> 
+
+<script>
+    // 1. Data Structure and Preparation
+    const allNodes = [
+        { id: 'A', group: 'entity', label: 'Node A' }, { id: 'B', group: 'entity', label: 'Node B' },
+        { id: 'C', group: 'entity', label: 'Node C' }, { id: 'D', group: 'entity', label: 'Node D' },
+        { id: 'E', group: 'entity', label: 'Node E' },
+        { id: 'H1', group: 'hyperedge', label: 'Group 1' }, { id: 'H2', group: 'hyperedge', label: 'Group 2' },
+        { id: 'H3', group: 'hyperedge', label: 'Group 3' } 
+    ];
+
+    const bipartiteLinks = [
+        { source: 'A', target: 'H1', type: 'bipartite' }, { source: 'B', target: 'H1', type: 'bipartite' }, 
+        { source: 'C', target: 'H1', type: 'bipartite' }, { source: 'B', target: 'H2', type: 'bipartite' }, 
+        { source: 'D', target: 'H2', type: 'bipartite' }, { source: 'E', target: 'H2', type: 'bipartite' },
+        { source: 'C', target: 'H3', type: 'bipartite' }, { source: 'E', target: 'H3', type: 'bipartite' }
+    ];
+    
+    const twoSectionLinks = [
+        { source: 'A', target: 'B', type: '2section' }, { source: 'A', target: 'C', type: '2section' },
+        { source: 'B', target: 'C', type: '2section' }, { source: 'B', target: 'D', type: '2section' },
+        { source: 'B', target: 'E', type: '2section' }, { source: 'C', target: 'E', type: '2section' },
+        { source: 'D', target: 'E', type: '2section' }
+    ];
+
+    // Global state variables
+    let currentView = 'bipartite'; 
+    let activeHyperedgeId = null;
+    let nodeSelection; 
+    let linkSelection; 
+    let labelSelection;
+    let simulation;
+    let linkG, nodeG, labelG; // References to the <g> containers
+
+    const entityNodes = allNodes.filter(d => d.group === 'entity');
+    const statusMessage = d3.select("#status-message");
+    const viewModeSpan = d3.select("#view-mode");
+    const viewDescriptionDiv = d3.select("#view-description");
+    const width = 800;
+    const height = 600;
+    const svg = d3.select("svg").attr("viewBox", [0, 0, width, height]);
+
+
+    // Initialization Function
+    function initializeGraph() {
+        // Populate the dropdown
+        const select = d3.select("#node-select");
+        entityNodes.forEach(d => {
+            select.append("option").attr("value", d.id).text(d.label);
+        });
+
+        // Setup D3 Simulation
+        simulation = d3.forceSimulation(allNodes)
+            .force("charge", d3.forceManyBody().strength(-200))                   
+            .force("center", d3.forceCenter(width / 2, height / 2));
+        
+        // 1. Create the container groups once
+        linkG = svg.append("g").attr("class", "links");
+        nodeG = svg.append("g").attr("class", "nodes");
+        labelG = svg.append("g").attr("class", "labels");
+        
+        // 2. Initialize the selections (these are the 'data' selections)
+        linkSelection = linkG.selectAll("line");
+        nodeSelection = nodeG.selectAll("circle");
+        labelSelection = labelG.selectAll("text");
+        
+        // Bind tick function
+        simulation.on("tick", ticked);
+
+        // Initial draw
+        drawGraph();
+    }
+    
+    // Draw/Update Graph Function
+    function drawGraph() {
+        const linksToDisplay = currentView === 'bipartite' ? bipartiteLinks : twoSectionLinks;
+        
+        // 3. Restart Simulation with current links
+        simulation.force("link", d3.forceLink(linksToDisplay).id(d => d.id).distance(currentView === 'bipartite' ? 50 : 80));
+        simulation.nodes(allNodes); // Ensure all nodes are tracked
+        
+        // 4. Update Links
+        linkSelection = linkSelection.data(linksToDisplay, d => d.source.id + "-" + d.target.id).join(
+            enter => enter.append("line").attr("class", d => d.type === 'bipartite' ? 'link' : 'link two-section-link'),
+            update => update.attr("class", d => d.type === 'bipartite' ? 'link' : 'link two-section-link'),
+            exit => exit.remove()
+        );
+
+        // 5. Update Nodes 
+        nodeSelection = nodeSelection.data(allNodes, d => d.id).join("circle")
+            .attr("r", d => d.group === 'entity' ? 10 : 8)
+            .attr("class", d => d.group === 'entity' ? 'node entity-node' : 'node hyperedge-proxy')
+            .style("display", d => currentView === 'bipartite' || d.group === 'entity' ? null : 'none') 
+            .call(drag(simulation))
+            .on('click', handleNodeClick);
+            
+        // 6. Update Labels
+        labelSelection = labelSelection.data(allNodes, d => d.id).join("text")
+            .text(d => d.id)
+            .attr("font-size", 10)
+            .attr("dx", 12)
+            .attr("dy", ".35em")
+            .style("display", d => currentView === 'bipartite' || d.group === 'entity' ? null : 'none'); 
+        
+        // 7. Reset visual state and restart
+        clearHighlight(); 
+        simulation.alpha(1).restart();
+        
+        // 8. Update description
+        viewModeSpan.text(currentView === 'bipartite' ? 'Bipartite' : '2-Section');
+        viewDescriptionDiv.html(currentView === 'bipartite' 
+            ? '<p>Current View: **Bipartite Projection**. Nodes (Blue) connect to Group Proxies (Pink) they belong to. Click a **Pink Proxy** to highlight its members.</p>'
+            : '<p>Current View: **2-Section Graph**. An edge (Blue) exists between two nodes if they share **at least one** group/hyperedge. Use the dropdown to highlight a node and its connections.</p>'
+        );
+    }
+    
+    // Toggle View Function
+    function toggleView() {
+        currentView = currentView === 'bipartite' ? '2section' : 'bipartite';
+        drawGraph();
+    }
+
+
+    // 3. Tick Function (Now called `ticked` to avoid confusion with `simulation.on`)
+    function ticked() {
+        linkSelection
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        nodeSelection
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+            
+        labelSelection
+            .attr("x", d => d.x)
+            .attr("y", d => d.y);
+    }
+
+    // 4. Highlighting Logic 
+    function handleNodeClick(event, d) {
+        if (d.group === 'entity') {
+            clearHighlight();
+            if (currentView === '2section') {
+                d3.select("#node-select").property('value', d.id);
+                handleSearchSelect(d.id);
+            }
+            return;
+        }
+
+        if (d.group === 'hyperedge' && currentView === 'bipartite') {
+            if (activeHyperedgeId === d.id) {
+                clearHighlight();
+                return;
+            }
+
+            clearHighlight(); 
+            activeHyperedgeId = d.id;
+
+            const connectedNodeIds = bipartiteLinks
+                .filter(l => l.source.id === d.id || l.target.id === d.id)
+                .map(l => (l.source.id === d.id ? l.target.id : l.source.id));
+            
+            connectedNodeIds.push(d.id); 
+
+            nodeSelection.classed('faded', n => !connectedNodeIds.includes(n.id))
+                .classed('highlighted-node', n => connectedNodeIds.includes(n.id) && n.group === 'entity')
+                .classed('highlighted-hyperedge-proxy', n => n.id === d.id); 
+            
+            linkSelection.classed('faded', l => l.source.id !== d.id && l.target.id !== d.id)
+                .classed('highlighted-link', l => l.source.id === d.id || l.target.id === d.id);
+
+            labelSelection.classed('faded', n => !connectedNodeIds.includes(n.id));
+
+            statusMessage.text(`Current Selection: ${d.label} (${d.id}). Connects ${connectedNodeIds.length - 1} nodes.`);
+        }
+    }
+    
+    function handleSearchSelect(nodeId) {
+        clearHighlight();
+        
+        if (!nodeId) {
+            return;
+        }
+        
+        const isBipartite = currentView === 'bipartite';
+        const linkData = isBipartite ? bipartiteLinks : twoSectionLinks;
+        
+        const connectedIds = linkData
+            .filter(l => l.source.id === nodeId || l.target.id === nodeId)
+            .flatMap(l => [l.source.id, l.target.id])
+            .filter(id => id !== nodeId); 
+
+        const highlightIds = [nodeId, ...new Set(connectedIds)]; 
+
+        nodeSelection.classed('faded', n => !highlightIds.includes(n.id))
+            .classed('highlighted-node', n => n.id === nodeId) 
+            .classed('highlighted-hyperedge-proxy', n => isBipartite && n.group === 'hyperedge' && highlightIds.includes(n.id)); 
+
+        linkSelection.classed('faded', l => l.source.id !== nodeId && l.target.id !== nodeId)
+            .classed('highlighted-link', l => l.source.id === nodeId || l.target.id === nodeId);
+
+        labelSelection.classed('faded', n => !highlightIds.includes(n.id));
+        
+        const nodeLabel = entityNodes.find(n => n.id === nodeId)?.label || nodeId;
+        const count = new Set(connectedIds).size;
+        const detail = isBipartite ? `Belongs to ${count} groups.` : `Connected to ${count} nodes.`;
+        statusMessage.text(`Current Selection: ${nodeLabel} (${nodeId}). ${detail}`);
+    }
+
+    function clearHighlight() {
+        activeHyperedgeId = null;
+        nodeSelection.classed('faded', false).classed('highlighted-node', false).classed('highlighted-hyperedge-proxy', false);
+        linkSelection.classed('faded', false).classed('highlighted-link', false);
+        labelSelection.classed('faded', false);
+        statusMessage.text("Current Selection: None");
+        d3.select("#node-select").property('value', "");
+    }
+
+    // 5. Drag Functionality
+    function drag(simulation) {
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null; 
+            d.fy = null;
+        }
+
+        return d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended);
+    }
+    
+    // Start the whole process
+    initializeGraph();
+</script>
+
+</body>
+</html>

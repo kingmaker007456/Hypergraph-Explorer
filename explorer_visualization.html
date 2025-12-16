@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HyperGraph Explorer Visualization (Vis.js) - Toggle Views</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        #mynetwork {
+            width: 800px;
+            height: 600px;
+            border: 1px solid lightgray;
+        }
+    </style>
+</head>
+<body>
+
+<h3>Hypergraph Visualization (Vis.js)</h3>
+
+<div id="controls">
+    <button onclick="toggleView()">Toggle View: <span id="view-mode">Bipartite</span></button>
+</div>
+<div id="mynetwork"></div>
+<div id="view-description">
+    <p>Current View: **Bipartite Projection**. Nodes (Blue) connect to Group Proxies (Pink) they belong to.</p>
+</div> 
+
+<script type="text/javascript">
+    // 1. Data Definition (Mapping from Python Example)
+    const allNodesData = [
+        // Nodes (People/Entities)
+        { id: 'A', label: 'A', group: 'node' },
+        { id: 'B', label: 'B', group: 'node' },
+        { id: 'C', label: 'C', group: 'node' },
+        { id: 'D', label: 'D', group: 'node' },
+        { id: 'E', label: 'E', group: 'node' },
+        
+        // Hyperedge Proxies (The Relationships/Groups)
+        { id: 'H1', label: 'Group 1', group: 'hyperedge' }, // {A, B, C}
+        { id: 'H2', label: 'Group 2', group: 'hyperedge' }, // {B, D, E}
+        { id: 'H3', label: 'Group 3', group: 'hyperedge' }  // {C, E}
+    ];
+
+    // Bipartite Edges (Node to Hyperedge Proxy)
+    const bipartiteEdges = [
+        { id: 'A-H1', from: 'A', to: 'H1', color: { color: 'gray' } },
+        { id: 'B-H1', from: 'B', to: 'H1', color: { color: 'gray' } },
+        { id: 'C-H1', from: 'C', to: 'H1', color: { color: 'gray' } },
+        
+        { id: 'B-H2', from: 'B', to: 'H2', color: { color: 'gray' } },
+        { id: 'D-H2', from: 'D', to: 'H2', color: { color: 'gray' } },
+        { id: 'E-H2', from: 'E', to: 'H2', color: { color: 'gray' } },
+
+        { id: 'C-H3', from: 'C', to: 'H3', color: { color: 'gray' } },
+        { id: 'E-H3', from: 'E', to: 'H3', color: { color: 'gray' } }
+    ];
+    
+    // 2-Section Edges (Node to Node, derived from shared groups)
+    // Edges: (A, B), (A, C), (B, C) from H1; (B, D), (B, E), (D, E) from H2; (C, E) from H3
+    const twoSectionEdges = [
+        { id: 'A-B', from: 'A', to: 'B', group: '2section' }, 
+        { id: 'A-C', from: 'A', to: 'C', group: '2section' }, 
+        { id: 'B-C', from: 'B', to: 'C', group: '2section' },
+        { id: 'B-D', from: 'B', to: 'D', group: '2section' }, 
+        { id: 'B-E', from: 'B', to: 'E', group: '2section' }, 
+        { id: 'D-E', from: 'D', to: 'E', group: '2section' },
+        { id: 'C-E', from: 'C', to: 'E', group: '2section' }
+    ];
+
+    // 2. Vis.js Setup
+    const container = document.getElementById('mynetwork');
+    const nodesDataSet = new vis.DataSet(allNodesData);
+    const edgesDataSet = new vis.DataSet(bipartiteEdges);
+    
+    let currentView = 'bipartite';
+
+    const data = {
+        nodes: nodesDataSet,
+        edges: edgesDataSet
+    };
+
+    const options = {
+        nodes: {
+            shape: 'dot',
+            size: 15,
+            font: { size: 12 }
+        },
+        groups: {
+            node: { color: { background: '#ADD8E6', border: '#4682B4' } }, // Light Blue
+            hyperedge: { shape: 'box', color: { background: '#FFB6C1', border: '#FF69B4' } }, // Light Pink
+            '2section': { color: { color: '#1E90FF', highlight: '#FF4500' }, width: 2 } // Dodger Blue for 2-section links
+        },
+        edges: {
+            color: 'gray'
+        },
+        physics: {
+            enabled: true,
+            forceAtlas2Based: {
+                gravitationalConstant: -26,
+                centralGravity: 0.005,
+                springLength: 100,
+                springConstant: 0.18,
+                damping: 0.4
+            }
+        }
+    };
+
+    // 3. Initialize the Network
+    const network = new vis.Network(container, data, options);
+    
+    // 4. Toggle Logic (NEW)
+    function toggleView() {
+        if (currentView === 'bipartite') {
+            // Switch to 2-Section View
+            currentView = '2section';
+            
+            // 1. Update Edges
+            edgesDataSet.clear();
+            edgesDataSet.add(twoSectionEdges);
+            
+            // 2. Hide Hyperedge Proxy Nodes
+            nodesDataSet.update(allNodesData.map(node => {
+                if (node.group === 'hyperedge') {
+                    // Vis.js hides nodes if their size is set to 0 and their label is empty.
+                    return { id: node.id, hidden: true };
+                }
+                return { id: node.id, hidden: false };
+            }));
+
+            // 3. Update UI
+            document.getElementById('view-mode').innerText = '2-Section';
+            document.getElementById('view-description').innerHTML = 
+                '<p>Current View: **2-Section Graph**. An edge (Blue) exists between two nodes if they share **at least one** group/hyperedge.</p>';
+            
+        } else {
+            // Switch back to Bipartite View
+            currentView = 'bipartite';
+
+            // 1. Update Edges
+            edgesDataSet.clear();
+            edgesDataSet.add(bipartiteEdges);
+            
+            // 2. Show all Nodes
+            nodesDataSet.update(allNodesData.map(node => ({ id: node.id, hidden: false })));
+
+            // 3. Update UI
+            document.getElementById('view-mode').innerText = 'Bipartite';
+            document.getElementById('view-description').innerHTML = 
+                '<p>Current View: **Bipartite Projection**. Nodes (Blue) connect to Group Proxies (Pink) they belong to.</p>';
+        }
+        
+        // Trigger a redraw and recalculate physics
+        network.setOptions(options); 
+        network.fit();
+    }
+</script>
+
+</body>
+</html>
